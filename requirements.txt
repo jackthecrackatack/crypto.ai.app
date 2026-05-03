@@ -3,7 +3,5 @@ ccxt
 pandas
 numpy
 scikit-learn
-tensorflow
 matplotlib
 requests
-ta
