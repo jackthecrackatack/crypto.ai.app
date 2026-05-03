@@ -7,14 +7,8 @@ import sqlite3
 from datetime import timedelta
 import matplotlib.pyplot as plt
 
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.metrics import mean_squared_error
-
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
-
-import ta  # technical indicators
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import StandardScaler
 
 # =========================
 # DATABASE
@@ -52,7 +46,7 @@ def get_gbp_rate():
 # =========================
 def get_crypto(symbol):
     exchange = ccxt.binance()
-    bars = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=500)
+    bars = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=300)
 
     df = pd.DataFrame(bars, columns=[
         'timestamp','open','high','low','close','volume'
@@ -62,110 +56,76 @@ def get_crypto(symbol):
     return df
 
 # =========================
-# FEATURES
+# FEATURES (THIS IS YOUR "AI")
 # =========================
-def add_indicators(df):
+def add_features(df):
     df['ma20'] = df['close'].rolling(20).mean()
-    df['rsi'] = ta.momentum.RSIIndicator(df['close']).rsi()
+    df['ma50'] = df['close'].rolling(50).mean()
+    df['returns'] = df['close'].pct_change()
+    df['volatility'] = df['returns'].rolling(10).std()
+
     df = df.dropna()
     return df
 
 # =========================
-# LSTM PREP
+# TRAIN MODEL
 # =========================
-def prepare_lstm(df):
-    scaler = MinMaxScaler()
-    scaled = scaler.fit_transform(df[['close']])
-
-    X, y = [], []
-    window = 20
-
-    for i in range(window, len(scaled)):
-        X.append(scaled[i-window:i])
-        y.append(scaled[i])
-
-    return np.array(X), np.array(y), scaler
-
-# =========================
-# LSTM MODEL
-# =========================
-def build_lstm(shape):
-    model = Sequential()
-    model.add(LSTM(50, return_sequences=True, input_shape=shape))
-    model.add(LSTM(50))
-    model.add(Dense(1))
-    model.compile(optimizer='adam', loss='mse')
-    return model
-
-# =========================
-# GB MODEL
-# =========================
-def train_gb(df):
-    X = df[['close','volume','ma20','rsi']]
+def train_model(df):
+    features = ['close','volume','ma20','ma50','volatility']
+    
+    X = df[features]
     y = df['close'].shift(-1).dropna()
     X = X.iloc[:-1]
 
-    model = GradientBoostingRegressor()
-    model.fit(X, y)
-    return model
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    model = RandomForestRegressor(n_estimators=100)
+    model.fit(X_scaled, y)
+
+    return model, scaler
 
 # =========================
-# ENSEMBLE PREDICT
+# MULTI STEP PREDICTION
 # =========================
-def predict_ensemble(lstm, gb, df, scaler, steps):
+def predict_future(model, scaler, df, steps):
+    features = ['close','volume','ma20','ma50','volatility']
+
     preds = []
-
-    lstm_input = df[['close']].values[-20:]
-    lstm_input = scaler.transform(lstm_input).reshape(1,20,1)
-
-    gb_input = df[['close','volume','ma20','rsi']].iloc[-1].values.reshape(1,-1)
+    current = df.iloc[-1:].copy()
 
     for _ in range(steps):
+        X = current[features]
+        X_scaled = scaler.transform(X)
 
-        lstm_pred = lstm.predict(lstm_input, verbose=0)[0][0]
-        lstm_pred = scaler.inverse_transform([[lstm_pred]])[0][0]
+        pred = model.predict(X_scaled)[0]
+        preds.append(pred)
 
-        gb_pred = gb.predict(gb_input)[0]
-
-        final_pred = (lstm_pred + gb_pred) / 2
-        preds.append(final_pred)
-
-        # update inputs
-        lstm_input = np.append(lstm_input[:,1:,:], [[[scaler.transform([[final_pred]])[0][0]]]], axis=1)
-        gb_input[0][0] = final_pred
+        # update fake future row
+        new_row = current.copy()
+        new_row['close'] = pred
+        current = new_row
 
     return preds
 
 # =========================
-# BACKTEST
+# UI
 # =========================
-def backtest(df):
-    y_true = df['close'].shift(-1).dropna()
-    y_pred = df['close'].iloc[:-1]
-
-    return mean_squared_error(y_true, y_pred)
-
-# =========================
-# STREAMLIT UI
-# =========================
-st.title("🚀 Ultimate AI Crypto Predictor")
+st.title("🚀 Crypto AI Predictor (Deployable Version)")
 
 symbol = st.text_input("Crypto Pair", "BTC/USDT")
-steps = st.slider("Prediction Steps", 1, 24, 8)
+steps = st.slider("Prediction Steps (hours)", 1, 24, 8)
 
-if st.button("Run Ultimate Prediction"):
+if st.button("Run Prediction"):
 
-    with st.spinner("Building models..."):
+    with st.spinner("Processing..."):
+
         df = get_crypto(symbol)
-        df = add_indicators(df)
+        df = add_features(df)
 
-        gb_model = train_gb(df)
+        model, scaler = train_model(df)
 
-        X, y, scaler = prepare_lstm(df)
-        lstm_model = build_lstm((X.shape[1],1))
-        lstm_model.fit(X, y, epochs=5, batch_size=16, verbose=0)
-
-        preds = predict_ensemble(lstm_model, gb_model, df, scaler, steps)
+        preds = predict_future(model, scaler, df, steps)
 
         gbp_rate = get_gbp_rate()
 
@@ -191,18 +151,20 @@ if st.button("Run Ultimate Prediction"):
 
     # CHART
     fig, ax = plt.subplots()
+
     ax.plot(df['timestamp'].tail(100), df['close'].tail(100), label="History")
     ax.plot(future_times, preds, linestyle='dashed', label="Prediction")
+
     ax.legend()
+    ax.set_title(symbol)
+
     st.pyplot(fig)
 
-    # BACKTEST
-    st.subheader("🧪 Model Error (baseline)")
-    st.write(backtest(df))
-
     # HISTORY
-    st.subheader("💾 Stored Predictions")
-    history = pd.read_sql("SELECT * FROM predictions ORDER BY time DESC LIMIT 20", conn)
+    st.subheader("💾 Previous Predictions")
+    history = pd.read_sql(
+        "SELECT * FROM predictions ORDER BY time DESC LIMIT 20", conn
+    )
     st.dataframe(history)
 
     st.success("Done 🚀")
