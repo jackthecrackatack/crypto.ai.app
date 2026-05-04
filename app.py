@@ -153,9 +153,9 @@ def get_signal(df, preds):
 # =========================
 # UI
 # =========================
-st.set_page_config(page_title="Crypto AI Pro", layout="wide")
+st.set_page_config(page_title="Crypto Price Predictor", layout="wide")
 
-st.title("🚀 Crypto AI Predictor PRO")
+st.title("🚀 Crypto Price Predictor")
 
 coin_map = {
     "BTC": "bitcoin",
