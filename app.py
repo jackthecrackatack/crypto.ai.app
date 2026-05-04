@@ -101,26 +101,38 @@ def predict_future(model, scaler, df, steps):
     temp_df = df.copy()
 
     for _ in range(steps):
+
+        # Ensure no NaNs BEFORE prediction
+        temp_df = temp_df.fillna(method='ffill').fillna(method='bfill')
+
         current = temp_df.iloc[-1:]
 
         X = current[features]
+
+        # Extra safety check
+        if X.isnull().values.any():
+            break
+
         X_scaled = scaler.transform(X)
 
         pred = model.predict(X_scaled)[0]
+
+        # Optional realism tweak
+        pred += np.random.normal(0, pred * 0.002)
+
         preds.append(pred)
 
         # Create new row
         new_row = current.copy()
         new_row['close'] = pred
 
-        # Update features PROPERLY
+        # Append
         temp_df = pd.concat([temp_df, new_row], ignore_index=True)
 
+        # Recalculate features
         temp_df['ma20'] = temp_df['close'].rolling(10).mean()
         temp_df['returns'] = temp_df['close'].pct_change()
         temp_df['volatility'] = temp_df['returns'].rolling(5).std()
-
-        temp_df = temp_df.dropna()
 
     return preds
 
