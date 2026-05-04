@@ -76,7 +76,7 @@ def train_model(df):
     features = ['close','volume','ma10','volatility']
 
     X = df[features]
-    y = df['close'].shift(-1).fillna(method="ffill")
+    y = df['close'].shift(-1).ffill()
 
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
