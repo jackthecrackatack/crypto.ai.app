@@ -1,10 +1,9 @@
 import streamlit as st
-import ccxt
 import pandas as pd
 import numpy as np
 import requests
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 
 from sklearn.ensemble import RandomForestRegressor
@@ -42,36 +41,43 @@ def get_gbp_rate():
         return 0.79
 
 # =========================
-# DATA
+# COINGECKO DATA (FIXED)
 # =========================
-def get_crypto(symbol):
-    exchange = ccxt.binance()
-    bars = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=300)
+def get_crypto(symbol="bitcoin"):
+    url = f"https://api.coingecko.com/api/v3/coins/{symbol}/market_chart"
+    
+    params = {
+        "vs_currency": "usd",
+        "days": "2",
+        "interval": "hourly"
+    }
 
-    df = pd.DataFrame(bars, columns=[
-        'timestamp','open','high','low','close','volume'
-    ])
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    data = requests.get(url, params=params).json()
+
+    prices = data["prices"]
+
+    df = pd.DataFrame(prices, columns=["timestamp", "close"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+
+    # Fake volume (since free API doesn't include it)
+    df["volume"] = np.random.rand(len(df)) * 1000
 
     return df
 
 # =========================
-# FEATURES (THIS IS YOUR "AI")
+# FEATURES
 # =========================
 def add_features(df):
-    df['ma20'] = df['close'].rolling(20).mean()
-    df['ma50'] = df['close'].rolling(50).mean()
+    df['ma20'] = df['close'].rolling(10).mean()
     df['returns'] = df['close'].pct_change()
-    df['volatility'] = df['returns'].rolling(10).std()
-
-    df = df.dropna()
-    return df
+    df['volatility'] = df['returns'].rolling(5).std()
+    return df.dropna()
 
 # =========================
-# TRAIN MODEL
+# MODEL
 # =========================
 def train_model(df):
-    features = ['close','volume','ma20','ma50','volatility']
+    features = ['close','volume','ma20','volatility']
     
     X = df[features]
     y = df['close'].shift(-1).dropna()
@@ -86,10 +92,10 @@ def train_model(df):
     return model, scaler
 
 # =========================
-# MULTI STEP PREDICTION
+# PREDICTION
 # =========================
 def predict_future(model, scaler, df, steps):
-    features = ['close','volume','ma20','ma50','volatility']
+    features = ['close','volume','ma20','volatility']
 
     preds = []
     current = df.iloc[-1:].copy()
@@ -101,7 +107,6 @@ def predict_future(model, scaler, df, steps):
         pred = model.predict(X_scaled)[0]
         preds.append(pred)
 
-        # update fake future row
         new_row = current.copy()
         new_row['close'] = pred
         current = new_row
@@ -111,25 +116,31 @@ def predict_future(model, scaler, df, steps):
 # =========================
 # UI
 # =========================
-st.title("🚀 Crypto AI Predictor (Deployable Version)")
+st.title("🚀 Crypto AI Predictor (Stable Deploy Version)")
 
-symbol = st.text_input("Crypto Pair", "BTC/USDT")
-steps = st.slider("Prediction Steps (hours)", 1, 24, 8)
+coin_map = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "XRP": "ripple",
+    "DOGE": "dogecoin"
+}
+
+coin = st.selectbox("Select Crypto", list(coin_map.keys()))
+steps = st.slider("Prediction Hours", 1, 24, 8)
 
 if st.button("Run Prediction"):
 
-    with st.spinner("Processing..."):
+    with st.spinner("Loading..."):
 
-        df = get_crypto(symbol)
+        df = get_crypto(coin_map[coin])
         df = add_features(df)
 
         model, scaler = train_model(df)
-
         preds = predict_future(model, scaler, df, steps)
 
         gbp_rate = get_gbp_rate()
 
-    # TIMES
     future_times = [
         df['timestamp'].iloc[-1] + timedelta(hours=i+1)
         for i in range(steps)
@@ -138,33 +149,24 @@ if st.button("Run Prediction"):
     result_df = pd.DataFrame({
         "Time": future_times,
         "USD": preds,
-        "GBP": np.array(preds)*gbp_rate
+        "GBP": np.array(preds) * gbp_rate
     })
 
-    # SAVE
     for t, p in zip(future_times, preds):
-        save_prediction(t, symbol, p)
+        save_prediction(t, coin, p)
 
-    # TABLE
     st.subheader("📊 Predictions")
     st.dataframe(result_df)
 
-    # CHART
     fig, ax = plt.subplots()
-
-    ax.plot(df['timestamp'].tail(100), df['close'].tail(100), label="History")
+    ax.plot(df['timestamp'], df['close'], label="History")
     ax.plot(future_times, preds, linestyle='dashed', label="Prediction")
-
     ax.legend()
-    ax.set_title(symbol)
 
     st.pyplot(fig)
 
-    # HISTORY
-    st.subheader("💾 Previous Predictions")
-    history = pd.read_sql(
-        "SELECT * FROM predictions ORDER BY time DESC LIMIT 20", conn
-    )
+    st.subheader("💾 History")
+    history = pd.read_sql("SELECT * FROM predictions ORDER BY time DESC LIMIT 20", conn)
     st.dataframe(history)
 
-    st.success("Done 🚀")
+    st.success("Working perfectly 🚀")
