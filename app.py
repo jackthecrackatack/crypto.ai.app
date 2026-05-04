@@ -155,7 +155,7 @@ def get_signal(df, preds):
 # =========================
 st.set_page_config(page_title="Crypto Price Predictor", layout="wide")
 
-st.title("🚀 Crypto Price Predictor")
+st.title("Crypto Price Predictor")
 
 coin_map = {
     "BTC": "bitcoin",
