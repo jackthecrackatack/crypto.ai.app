@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import requests
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import timedelta
 import matplotlib.pyplot as plt
 
 from sklearn.ensemble import RandomForestRegressor
@@ -41,26 +41,20 @@ def get_gbp_rate():
         return 0.79
 
 # =========================
-# COINGECKO DATA (FIXED)
+# DATA (COINGECKO)
 # =========================
 def get_crypto(symbol="bitcoin"):
     url = f"https://api.coingecko.com/api/v3/coins/{symbol}/market_chart"
-    
-    params = {
-        "vs_currency": "usd",
-        "days": "2",
-        "interval": "hourly"
-    }
+    params = {"vs_currency": "usd", "days": "2", "interval": "hourly"}
 
     data = requests.get(url, params=params).json()
-
     prices = data["prices"]
 
     df = pd.DataFrame(prices, columns=["timestamp", "close"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
 
-    # Fake volume (since free API doesn't include it)
-    df["volume"] = np.random.rand(len(df)) * 1000
+    # fake volume (stable)
+    df["volume"] = np.linspace(100, 200, len(df))
 
     return df
 
@@ -68,78 +62,100 @@ def get_crypto(symbol="bitcoin"):
 # FEATURES
 # =========================
 def add_features(df):
-    df['ma20'] = df['close'].rolling(10).mean()
+    df['ma10'] = df['close'].rolling(10).mean()
     df['returns'] = df['close'].pct_change()
     df['volatility'] = df['returns'].rolling(5).std()
-    return df.dropna()
+
+    df = df.bfill().ffill()
+    return df
 
 # =========================
 # MODEL
 # =========================
 def train_model(df):
-    features = ['close','volume','ma20','volatility']
-    
+    features = ['close','volume','ma10','volatility']
+
     X = df[features]
-    y = df['close'].shift(-1).dropna()
-    X = X.iloc[:-1]
+    y = df['close'].shift(-1).fillna(method="ffill")
 
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    model = RandomForestRegressor(n_estimators=100)
+    model = RandomForestRegressor(n_estimators=150)
     model.fit(X_scaled, y)
 
     return model, scaler
 
 # =========================
-# PREDICTION
+# BETTER PREDICTION ENGINE
 # =========================
 def predict_future(model, scaler, df, steps):
-    features = ['close','volume','ma20','volatility']
+    features = ['close','volume','ma10','volatility']
 
     preds = []
     temp_df = df.copy()
 
     for _ in range(steps):
-
-        # Ensure no NaNs BEFORE prediction
-        temp_df = temp_df.fillna(method='ffill').fillna(method='bfill')
+        temp_df = temp_df.bfill().ffill()
 
         current = temp_df.iloc[-1:]
 
         X = current[features]
-
-        # Extra safety check
-        if X.isnull().values.any():
-            break
-
         X_scaled = scaler.transform(X)
 
-        pred = model.predict(X_scaled)[0]
+        base_pred = model.predict(X_scaled)[0]
 
-        # Optional realism tweak
-        pred += np.random.normal(0, pred * 0.002)
+        # === IMPROVEMENTS ===
+
+        # trend (momentum)
+        trend = temp_df['close'].pct_change().tail(5).mean()
+
+        # volatility influence
+        volatility = temp_df['volatility'].iloc[-1]
+
+        # combine
+        pred = base_pred * (1 + trend)
+
+        # add realistic noise
+        pred += np.random.normal(0, volatility * pred * 0.5)
 
         preds.append(pred)
 
-        # Create new row
+        # append new row
         new_row = current.copy()
         new_row['close'] = pred
 
-        # Append
         temp_df = pd.concat([temp_df, new_row], ignore_index=True)
 
-        # Recalculate features
-        temp_df['ma20'] = temp_df['close'].rolling(10).mean()
+        # recalc features
+        temp_df['ma10'] = temp_df['close'].rolling(10).mean()
         temp_df['returns'] = temp_df['close'].pct_change()
         temp_df['volatility'] = temp_df['returns'].rolling(5).std()
 
     return preds
 
 # =========================
+# SIGNAL ENGINE
+# =========================
+def get_signal(df, preds):
+    last_price = df['close'].iloc[-1]
+    future_price = preds[-1]
+
+    change = (future_price - last_price) / last_price
+
+    if change > 0.01:
+        return "🟢 BUY"
+    elif change < -0.01:
+        return "🔴 SELL"
+    else:
+        return "🟡 HOLD"
+
+# =========================
 # UI
 # =========================
-st.title("🚀 Crypto AI Predictor (Stable Deploy Version)")
+st.set_page_config(page_title="Crypto AI Pro", layout="wide")
+
+st.title("🚀 Crypto AI Predictor PRO")
 
 coin_map = {
     "BTC": "bitcoin",
@@ -149,12 +165,14 @@ coin_map = {
     "DOGE": "dogecoin"
 }
 
-coin = st.selectbox("Select Crypto", list(coin_map.keys()))
-steps = st.slider("Prediction Hours", 1, 24, 8)
+col1, col2 = st.columns(2)
+
+coin = col1.selectbox("Crypto", list(coin_map.keys()))
+steps = col2.slider("Hours Ahead", 1, 24, 8)
 
 if st.button("Run Prediction"):
 
-    with st.spinner("Loading..."):
+    with st.spinner("Analyzing market..."):
 
         df = get_crypto(coin_map[coin])
         df = add_features(df)
@@ -164,6 +182,7 @@ if st.button("Run Prediction"):
 
         gbp_rate = get_gbp_rate()
 
+    # TIMES
     future_times = [
         df['timestamp'].iloc[-1] + timedelta(hours=i+1)
         for i in range(steps)
@@ -175,21 +194,34 @@ if st.button("Run Prediction"):
         "GBP": np.array(preds) * gbp_rate
     })
 
+    # SAVE
     for t, p in zip(future_times, preds):
         save_prediction(t, coin, p)
 
+    # SIGNAL
+    signal = get_signal(df, preds)
+
+    st.subheader(f"📢 Signal: {signal}")
+
+    # TABLE
     st.subheader("📊 Predictions")
     st.dataframe(result_df)
 
+    # CHART
     fig, ax = plt.subplots()
+
     ax.plot(df['timestamp'], df['close'], label="History")
     ax.plot(future_times, preds, linestyle='dashed', label="Prediction")
+
+    ax.set_title(f"{coin} Price Forecast")
     ax.legend()
+    ax.grid(True)
 
     st.pyplot(fig)
 
+    # HISTORY
     st.subheader("💾 History")
     history = pd.read_sql("SELECT * FROM predictions ORDER BY time DESC LIMIT 20", conn)
     st.dataframe(history)
 
-    st.success("Working perfectly 🚀")
+    st.success("Analysis complete 🚀")
