@@ -98,18 +98,29 @@ def predict_future(model, scaler, df, steps):
     features = ['close','volume','ma20','volatility']
 
     preds = []
-    current = df.iloc[-1:].copy()
+    temp_df = df.copy()
 
     for _ in range(steps):
+        current = temp_df.iloc[-1:]
+
         X = current[features]
         X_scaled = scaler.transform(X)
 
         pred = model.predict(X_scaled)[0]
         preds.append(pred)
 
+        # Create new row
         new_row = current.copy()
         new_row['close'] = pred
-        current = new_row
+
+        # Update features PROPERLY
+        temp_df = pd.concat([temp_df, new_row], ignore_index=True)
+
+        temp_df['ma20'] = temp_df['close'].rolling(10).mean()
+        temp_df['returns'] = temp_df['close'].pct_change()
+        temp_df['volatility'] = temp_df['returns'].rolling(5).std()
+
+        temp_df = temp_df.dropna()
 
     return preds
 
