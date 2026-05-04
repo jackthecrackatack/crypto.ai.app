@@ -45,7 +45,7 @@ def get_gbp_rate():
 # =========================
 def get_crypto(symbol="bitcoin"):
     url = f"https://api.coingecko.com/api/v3/coins/{symbol}/market_chart"
-    params = {"vs_currency": "usd", "days": "2", "interval": "hourly"}
+    params = {"vs_currency": "usd", "days": "30", "interval": "hourly"}
 
     data = requests.get(url, params=params).json()
     prices = data["prices"]
